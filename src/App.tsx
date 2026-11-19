@@ -268,6 +268,22 @@ export default function App() {
                   <span>t = {simState.metrics.simTimeSec.toFixed(1)}s</span>
                   <span aria-hidden="true">·</span>
                   <span>{simState.metrics.activeVehicles} on road</span>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    className={
+                      simState.collisions.length > 0
+                        ? 'font-semibold text-rose-700'
+                        : simState.metrics.totalCollisions > 0
+                          ? 'text-amber-700'
+                          : 'text-emerald-700'
+                    }
+                  >
+                    {simState.collisions.length > 0
+                      ? `▲ ${simState.collisions.length} overlap (${simState.metrics.totalCollisions} total)`
+                      : simState.metrics.totalCollisions > 0
+                        ? `0 active · ${simState.metrics.totalCollisions} logged`
+                        : '0 overlaps'}
+                  </span>
                 </div>
               </div>
 

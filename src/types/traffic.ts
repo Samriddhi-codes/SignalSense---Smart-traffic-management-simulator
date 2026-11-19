@@ -55,6 +55,27 @@ export interface Vehicle {
   braking: boolean;
 }
 
+export interface VehicleBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  cx: number;
+  cy: number;
+}
+
+export interface CollisionEvent {
+  pairKey: string;
+  vehicleAId: number;
+  vehicleBId: number;
+  directionA: Direction;
+  directionB: Direction;
+  overlapX: number;
+  overlapY: number;
+  overlapWidth: number;
+  overlapHeight: number;
+}
+
 export interface SensorReading {
   northCount: number;
   southCount: number;
@@ -133,6 +154,7 @@ export interface SimulationMetrics {
   activeVehicles: number;
   nsQueued: number;
   ewQueued: number;
+  totalCollisions: number;
   ruleHits: Record<ReflexRuleId, number>;
 }
 
@@ -143,6 +165,7 @@ export interface SimulationState {
   sensors: SensorReading;
   agentDecision: AgentDecision;
   controller: SignalControllerState;
+  collisions: CollisionEvent[];
   metrics: SimulationMetrics;
   decisionLog: DecisionLogEntry[];
   history: TimeSeriesPoint[];

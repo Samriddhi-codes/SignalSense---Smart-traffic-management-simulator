@@ -1,14 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   INTERSECTION_CENTER,
+  INTERSECTION_MAX_BOUND,
+  INTERSECTION_MIN_BOUND,
   LANE_OFFSET,
   ROAD_HALF_WIDTH,
   SENSOR_END_POS,
   SENSOR_START_POS,
   STOP_LINE_POS,
   WORLD_SIZE,
+  getVehicleWorldBounds,
 } from '../engine/simulation';
 import {
+  CollisionEvent,
   Direction,
   SignalLight,
   SimulationState,
@@ -73,7 +77,11 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
-function drawVehicle(ctx: CanvasRenderingContext2D, v: Vehicle) {
+function drawVehicle(
+  ctx: CanvasRenderingContext2D,
+  v: Vehicle,
+  isColliding: boolean
+) {
   const { x, y, angle } = getVehicleTransform(v);
   ctx.save();
   ctx.translate(x, y);
@@ -81,6 +89,17 @@ function drawVehicle(ctx: CanvasRenderingContext2D, v: Vehicle) {
 
   const halfL = v.length / 2;
   const halfW = v.width / 2;
+
+  // Collision alert halo around overlapping vehicles
+  if (isColliding) {
+    ctx.strokeStyle = '#EF4444';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#EF4444';
+    ctx.shadowBlur = 10;
+    drawRoundedRect(ctx, -halfL - 4, -halfW - 4, v.length + 8, v.width + 8, 7);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
 
   // Ground contact shadow
   ctx.fillStyle = 'rgba(2, 6, 23, 0.35)';
@@ -93,8 +112,8 @@ function drawVehicle(ctx: CanvasRenderingContext2D, v: Vehicle) {
   ctx.fill();
 
   // Subtle chassis outline
-  ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = isColliding ? '#DC2626' : 'rgba(15, 23, 42, 0.45)';
+  ctx.lineWidth = isColliding ? 1.8 : 1;
   ctx.stroke();
 
   // Roof & windshield glass (vehicle faces +X in local coords)
@@ -132,6 +151,215 @@ function drawVehicle(ctx: CanvasRenderingContext2D, v: Vehicle) {
   ctx.fillRect(-halfL - 0.5, -halfW + 2.5, 2.5, 3.5);
   ctx.fillRect(-halfL - 0.5, halfW - 6, 2.5, 3.5);
   ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+function drawCollisionOverlay(
+  ctx: CanvasRenderingContext2D,
+  collisions: CollisionEvent[],
+  vehicles: Vehicle[]
+) {
+  if (collisions.length === 0) return;
+
+  const boxSize = INTERSECTION_MAX_BOUND - INTERSECTION_MIN_BOUND;
+
+  // 1. Highlight central intersection conflict zone
+  ctx.save();
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.22)';
+  ctx.fillRect(
+    INTERSECTION_MIN_BOUND,
+    INTERSECTION_MIN_BOUND,
+    boxSize,
+    boxSize
+  );
+
+  ctx.strokeStyle = '#EF4444';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(
+    INTERSECTION_MIN_BOUND,
+    INTERSECTION_MIN_BOUND,
+    boxSize,
+    boxSize
+  );
+
+  // Hazard corner brackets
+  const bLen = 18;
+  ctx.strokeStyle = '#FEF08A';
+  ctx.lineWidth = 3;
+  const corners = [
+    [INTERSECTION_MIN_BOUND, INTERSECTION_MIN_BOUND, 1, 1],
+    [INTERSECTION_MAX_BOUND, INTERSECTION_MIN_BOUND, -1, 1],
+    [INTERSECTION_MIN_BOUND, INTERSECTION_MAX_BOUND, 1, -1],
+    [INTERSECTION_MAX_BOUND, INTERSECTION_MAX_BOUND, -1, -1],
+  ];
+  corners.forEach(([cx, cy, dx, dy]) => {
+    ctx.beginPath();
+    ctx.moveTo(cx + dx * bLen, cy);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx, cy + dy * bLen);
+    ctx.stroke();
+  });
+
+  // 2. Prominent hazard bounding boxes & ID tags around all colliding vehicles
+  const vehicleById = new Map(vehicles.map((v) => [v.id, v]));
+  const collidingVehicleIds = new Set<number>();
+  collisions.forEach((c) => {
+    collidingVehicleIds.add(c.vehicleAId);
+    collidingVehicleIds.add(c.vehicleBId);
+  });
+
+  collidingVehicleIds.forEach((id) => {
+    const vehicle = vehicleById.get(id);
+    if (!vehicle) return;
+
+    const bounds = getVehicleWorldBounds(vehicle);
+    const pad = 6;
+    const bx = bounds.minX - pad;
+    const by = bounds.minY - pad;
+    const bw = bounds.maxX - bounds.minX + pad * 2;
+    const bh = bounds.maxY - bounds.minY + pad * 2;
+
+    // Translucent hazard highlight fill
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.24)';
+    drawRoundedRect(ctx, bx, by, bw, bh, 4);
+    ctx.fill();
+
+    // Dashed high-contrast crimson bounding box
+    ctx.save();
+    ctx.strokeStyle = '#EF4444';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([5, 3]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.restore();
+
+    // Bold amber corner reticles around the vehicle bounding box
+    const reticle = 7;
+    ctx.strokeStyle = '#FEF08A';
+    ctx.lineWidth = 2.5;
+    const boxCorners = [
+      [bx, by, 1, 1],
+      [bx + bw, by, -1, 1],
+      [bx, by + bh, 1, -1],
+      [bx + bw, by + bh, -1, -1],
+    ];
+    boxCorners.forEach(([cx, cy, dx, dy]) => {
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * reticle, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy + dy * reticle);
+      ctx.stroke();
+    });
+
+    // Crisp vehicle hazard tag above bounding box
+    const tagText = `! #${vehicle.id}`;
+    ctx.font = '700 10px "JetBrains Mono", monospace';
+    const tagW = Math.max(38, ctx.measureText(tagText).width + 12);
+    const tagH = 16;
+    const tagX = Math.max(
+      8,
+      Math.min(WORLD_SIZE - tagW - 8, bounds.cx - tagW / 2)
+    );
+    const tagY = by - tagH - 4 >= 8 ? by - tagH - 4 : by + bh + 4;
+
+    ctx.fillStyle = '#991B1B';
+    drawRoundedRect(ctx, tagX, tagY, tagW, tagH, 4);
+    ctx.fill();
+    ctx.strokeStyle = '#FCA5A5';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = '#FEF08A';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tagText, tagX + tagW / 2, tagY + tagH / 2 + 0.5);
+  });
+
+  // 3. Impact markers on exact overlap regions
+  collisions.forEach((c) => {
+    const impactX = c.overlapX + c.overlapWidth / 2;
+    const impactY = c.overlapY + c.overlapHeight / 2;
+
+    // Exact overlap rectangle
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.55)';
+    ctx.fillRect(c.overlapX, c.overlapY, c.overlapWidth, c.overlapHeight);
+
+    // Impact target rings
+    ctx.beginPath();
+    ctx.arc(impactX, impactY, 18, 0, Math.PI * 2);
+    ctx.strokeStyle = '#FEF08A';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(impactX, impactY, 11, 0, Math.PI * 2);
+    ctx.fillStyle = '#DC2626';
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Crosshair X inside impact marker
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(impactX - 4, impactY - 4);
+    ctx.lineTo(impactX + 4, impactY + 4);
+    ctx.moveTo(impactX + 4, impactY - 4);
+    ctx.lineTo(impactX - 4, impactY + 4);
+    ctx.stroke();
+  });
+
+  // 3. Top-center visual warning banner on the canvas
+  const first = collisions[0];
+  const pairText =
+    collisions.length === 1
+      ? `Vehicle #${first.vehicleAId} (${first.directionA}) × #${first.vehicleBId} (${first.directionB})`
+      : `${collisions.length} overlapping vehicle pairs in intersection`;
+
+  const bannerW = 390;
+  const bannerH = 48;
+  const bannerX = INTERSECTION_CENTER - bannerW / 2;
+  const bannerY = 14;
+
+  ctx.fillStyle = '#991B1B';
+  ctx.shadowColor = 'rgba(15, 23, 42, 0.35)';
+  ctx.shadowBlur = 12;
+  drawRoundedRect(ctx, bannerX, bannerY, bannerW, bannerH, 8);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.strokeStyle = '#FCA5A5';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Warning triangle icon inside banner
+  const triX = bannerX + 22;
+  const triY = bannerY + 24;
+  ctx.fillStyle = '#FEF08A';
+  ctx.beginPath();
+  ctx.moveTo(triX, triY - 8);
+  ctx.lineTo(triX + 8, triY + 7);
+  ctx.lineTo(triX - 8, triY + 7);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#7F1D1D';
+  ctx.font = '700 10px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('!', triX, triY + 2);
+
+  // Warning headline and detail text
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '700 12px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText('COLLISION WARNING · INTERSECTION OVERLAP', bannerX + 40, bannerY + 9);
+
+  ctx.fillStyle = '#FEE2E2';
+  ctx.font = '500 11px "JetBrains Mono", monospace';
+  ctx.fillText(pairText, bannerX + 40, bannerY + 26);
 
   ctx.restore();
 }
@@ -503,10 +731,18 @@ export const IntersectionCanvas: React.FC<IntersectionCanvasProps> = ({
     drawArrow(255, INTERSECTION_CENTER + LANE_OFFSET, 0);
     drawArrow(WORLD_SIZE - 255, INTERSECTION_CENTER - LANE_OFFSET, Math.PI);
 
-    // 7. Vehicles
+    // 7. Vehicles & Collision Detection Overlay
+    const collidingIds = new Set<number>();
+    simState.collisions.forEach((c) => {
+      collidingIds.add(c.vehicleAId);
+      collidingIds.add(c.vehicleBId);
+    });
+
     for (const v of simState.vehicles) {
-      drawVehicle(ctx, v);
+      drawVehicle(ctx, v, collidingIds.has(v.id));
     }
+
+    drawCollisionOverlay(ctx, simState.collisions, simState.vehicles);
 
     // 8. Traffic Signal Heads at the 4 corners adjacent to stop lines
     const { nsLight, ewLight } = simState.controller;

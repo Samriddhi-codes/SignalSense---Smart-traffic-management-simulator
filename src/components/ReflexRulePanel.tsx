@@ -319,6 +319,29 @@ export const ReflexRulePanel: React.FC<ReflexRulePanelProps> = ({
             />
           </div>
 
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <label htmlFor="amber-slider" className="font-medium text-slate-700">
+                Amber Clearance Phase (0s = Unsafe Instant Switch)
+              </label>
+              <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                {config.amberDurationSec.toFixed(1)} s
+              </span>
+            </div>
+            <input
+              id="amber-slider"
+              type="range"
+              min={0.0}
+              max={3.0}
+              step={0.2}
+              value={config.amberDurationSec}
+              onChange={(e) =>
+                onUpdateConfig({ amberDurationSec: Number(e.target.value) })
+              }
+              className="lab-slider w-full"
+            />
+          </div>
+
           <div>
             <span className="block text-xs font-medium text-slate-700 mb-1.5">
               Default Priority (Both Low)

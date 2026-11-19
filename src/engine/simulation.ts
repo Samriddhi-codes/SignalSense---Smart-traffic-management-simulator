@@ -2,6 +2,7 @@ import {
   AgentConfig,
   ArrivalRates,
   Axis,
+  CollisionEvent,
   Direction,
   ReflexRuleId,
   SensorReading,
@@ -11,6 +12,7 @@ import {
   TrafficLevel,
   TrafficScenario,
   Vehicle,
+  VehicleBounds,
   VehicleType,
 } from '../types/traffic';
 import { axisLabel, evaluateReflexAgent } from './reflexAgent';
@@ -18,6 +20,8 @@ import { axisLabel, evaluateReflexAgent } from './reflexAgent';
 export const WORLD_SIZE = 800;
 export const INTERSECTION_CENTER = 400;
 export const ROAD_HALF_WIDTH = 76;
+export const INTERSECTION_MIN_BOUND = INTERSECTION_CENTER - ROAD_HALF_WIDTH;
+export const INTERSECTION_MAX_BOUND = INTERSECTION_CENTER + ROAD_HALF_WIDTH;
 export const LANE_OFFSET = 38; // Center of each directional lane from road centerline
 export const STOP_LINE_POS = 292;
 export const INTERSECTION_EXIT_POS = 486;
@@ -202,6 +206,112 @@ export function createVehicle(
   };
 }
 
+export function getVehicleWorldBounds(v: Vehicle): VehicleBounds {
+  let cx: number;
+  let cy: number;
+  let halfW: number;
+  let halfH: number;
+
+  switch (v.direction) {
+    case Direction.NORTH:
+      cx = INTERSECTION_CENTER - LANE_OFFSET;
+      cy = v.position;
+      halfW = v.width / 2;
+      halfH = v.length / 2;
+      break;
+    case Direction.SOUTH:
+      cx = INTERSECTION_CENTER + LANE_OFFSET;
+      cy = WORLD_SIZE - v.position;
+      halfW = v.width / 2;
+      halfH = v.length / 2;
+      break;
+    case Direction.WEST:
+      cx = v.position;
+      cy = INTERSECTION_CENTER + LANE_OFFSET;
+      halfW = v.length / 2;
+      halfH = v.width / 2;
+      break;
+    case Direction.EAST:
+      cx = WORLD_SIZE - v.position;
+      cy = INTERSECTION_CENTER - LANE_OFFSET;
+      halfW = v.length / 2;
+      halfH = v.width / 2;
+      break;
+  }
+
+  return {
+    minX: cx - halfW,
+    maxX: cx + halfW,
+    minY: cy - halfH,
+    maxY: cy + halfH,
+    cx,
+    cy,
+  };
+}
+
+/**
+ * Detects pairs of vehicles whose world bounding boxes overlap within the
+ * central intersection conflict zone ([INTERSECTION_MIN_BOUND, INTERSECTION_MAX_BOUND]).
+ */
+export function detectIntersectionCollisions(
+  vehicles: Vehicle[]
+): CollisionEvent[] {
+  const collisions: CollisionEvent[] = [];
+  const boundsList = vehicles.map((v) => ({
+    vehicle: v,
+    bounds: getVehicleWorldBounds(v),
+  }));
+
+  for (let i = 0; i < boundsList.length; i++) {
+    const a = boundsList[i];
+    // Quick rejection if vehicle A does not intersect the intersection box
+    if (
+      a.bounds.maxX <= INTERSECTION_MIN_BOUND ||
+      a.bounds.minX >= INTERSECTION_MAX_BOUND ||
+      a.bounds.maxY <= INTERSECTION_MIN_BOUND ||
+      a.bounds.minY >= INTERSECTION_MAX_BOUND
+    ) {
+      continue;
+    }
+
+    for (let j = i + 1; j < boundsList.length; j++) {
+      const b = boundsList[j];
+
+      const overlapMinX = Math.max(a.bounds.minX, b.bounds.minX);
+      const overlapMaxX = Math.min(a.bounds.maxX, b.bounds.maxX);
+      if (overlapMaxX <= overlapMinX) continue;
+
+      const overlapMinY = Math.max(a.bounds.minY, b.bounds.minY);
+      const overlapMaxY = Math.min(a.bounds.maxY, b.bounds.maxY);
+      if (overlapMaxY <= overlapMinY) continue;
+
+      // Verify the overlap region itself lies inside the intersection zone
+      const clippedMinX = Math.max(overlapMinX, INTERSECTION_MIN_BOUND);
+      const clippedMaxX = Math.min(overlapMaxX, INTERSECTION_MAX_BOUND);
+      const clippedMinY = Math.max(overlapMinY, INTERSECTION_MIN_BOUND);
+      const clippedMaxY = Math.min(overlapMaxY, INTERSECTION_MAX_BOUND);
+
+      if (clippedMaxX > clippedMinX && clippedMaxY > clippedMinY) {
+        const lowId = Math.min(a.vehicle.id, b.vehicle.id);
+        const highId = Math.max(a.vehicle.id, b.vehicle.id);
+        collisions.push({
+          pairKey: `${lowId}-${highId}`,
+          vehicleAId: a.vehicle.id,
+          vehicleBId: b.vehicle.id,
+          directionA: a.vehicle.direction,
+          directionB: b.vehicle.direction,
+          overlapX: clippedMinX,
+          overlapY: clippedMinY,
+          overlapWidth: clippedMaxX - clippedMinX,
+          overlapHeight: clippedMaxY - clippedMinY,
+        });
+      }
+    }
+  }
+
+  return collisions;
+}
+
 export function computeSensors(
   vehicles: Vehicle[],
   highThreshold: number
@@ -273,6 +383,7 @@ export function createInitialSimulationState(
 
   const sensors = computeSensors(vehicles, config.highThreshold);
   const decision = evaluateReflexAgent(sensors, config);
+  const collisions = detectIntersectionCollisions(vehicles);
   const initialAxis = decision.targetAxis;
 
   return {
@@ -294,6 +405,7 @@ export function createInitialSimulationState(
       phaseElapsedSec: 0,
       amberRemainingSec: 0,
     },
+    collisions,
     metrics: {
       simTimeSec: 0,
       vehiclesCleared: 0,
@@ -303,6 +415,7 @@ export function createInitialSimulationState(
       activeVehicles: vehicles.length,
       nsQueued: 0,
       ewQueued: 0,
+      totalCollisions: collisions.length,
       ruleHits: {
         [ReflexRuleId.NS_HIGH]: decision.ruleId === ReflexRuleId.NS_HIGH ? 1 : 0,
         [ReflexRuleId.EW_HIGH]: decision.ruleId === ReflexRuleId.EW_HIGH ? 1 : 0,
@@ -367,6 +480,7 @@ export function spawnVehicleInDirection(
   const vehicles = [...state.vehicles, newVehicle];
   const sensors = computeSensors(vehicles, config.highThreshold);
   const decision = evaluateReflexAgent(sensors, config);
+  const collisions = detectIntersectionCollisions(vehicles);
 
   return {
     ...state,
@@ -374,6 +488,7 @@ export function spawnVehicleInDirection(
     nextVehicleId: state.nextVehicleId + 1,
     sensors,
     agentDecision: decision,
+    collisions,
     metrics: {
       ...state.metrics,
       activeVehicles: vehicles.length,
@@ -654,7 +769,17 @@ export function stepSimulation(
     ];
   }
 
-  // 6. Update Metrics & Rolling History (every 1.0 sim second)
+  // 6. Detect overlapping vehicles within the intersection zone
+  const collisions = detectIntersectionCollisions(updatedVehicles);
+  const prevPairKeys = new Set(prevState.collisions.map((c) => c.pairKey));
+  let newCollisionIncidents = 0;
+  for (const c of collisions) {
+    if (!prevPairKeys.has(c.pairKey)) {
+      newCollisionIncidents++;
+    }
+  }
+
+  // 7. Update Metrics & Rolling History (every 1.0 sim second)
   const totalCleared = prevState.metrics.vehiclesCleared + clearedThisStep;
   const totalWait = prevState.metrics.totalWaitSec + waitAccumThisStep;
   const avgWaitSec = totalCleared > 0 ? totalWait / totalCleared : 0;
@@ -683,6 +808,7 @@ export function stepSimulation(
     sensors,
     agentDecision: decision,
     controller,
+    collisions,
     metrics: {
       simTimeSec: nextTime,
       vehiclesCleared: totalCleared,
@@ -692,6 +818,7 @@ export function stepSimulation(
       activeVehicles: updatedVehicles.length,
       nsQueued,
       ewQueued,
+      totalCollisions: prevState.metrics.totalCollisions + newCollisionIncidents,
       ruleHits,
     },
     decisionLog: logEntries,
