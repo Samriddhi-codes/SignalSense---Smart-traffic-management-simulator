@@ -1,0 +1,6 @@
+{
+  "name": "SignalSense",
+  "description": "Smart Traffic Management Simulator using a Simple Reflex Agent for four-way intersection signal control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
